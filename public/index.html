@@ -2713,33 +2713,6 @@ async function serverAsk(kind, text, images, signal) {
   if (!r.ok || !j || j.error) throw { code: (j && j.error) || (r.status === 429 ? "rate_limited" : "upstream_error") };
   return j;
 }
-/* VAQTINCHA: Gemini'ni to'g'ridan-to'g'ri brauzerdan chaqirish (kalit ochiq turadi — keyin serverga qaytarish kerak) */
-const GEMINI_KEY = "AQ.Ab8RN6I39lmHHcZ63dofVn48ievVsunVfd2Hh1WBBrRnlfnX2g";
-const GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"];
-async function directAsk(kind, text, images, signal) {
-  const parts = [{ text: aiPrompt(kind, text) }];
-  if (images) {
-    const image = await shrinkImage(images); if (!image) throw { code: "image_rejected" };
-    const m = /^data:([^;]+);base64,(.*)$/.exec(image);
-    parts.push({ inline_data: { mime_type: m[1], data: m[2] } });
-  }
-  const body = JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0 } });
-  let last = "upstream_error";
-  for (const model of GEMINI_MODELS) {
-    let r;
-    try { r = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY }, body, signal }); }
-    catch (e) { if (e && e.name === "AbortError") throw { code: "cancelled" }; last = "upstream_error"; continue; }
-    if (r.status === 429) { last = "rate_limited"; continue; }
-    if (r.status === 404 || r.status >= 500) { last = "upstream_error"; continue; }
-    const j = await r.json().catch(() => null);
-    if (!r.ok || !j) { console.warn("Gemini", model, r.status, j); last = "upstream_error"; continue; }
-    const out = (((j.candidates || [])[0] || {}).content || {}).parts || [];
-    const raw = out.map((p) => p.text || "").join("").trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
-    if (!raw) { last = "empty_completion"; continue; }
-    try { return JSON.parse(raw); } catch (e) { last = "invalid_json"; continue; }
-  }
-  throw { code: last };
-}
 (async () => {
   let s = null;
   if (window.claude && window.claude.use) { try { s = await window.claude.use("sample"); } catch (e) { s = null; } }
@@ -2748,8 +2721,8 @@ async function directAsk(kind, text, images, signal) {
     AI.ask = (kind, text, images, signal) => s.json(aiPrompt(kind, text), images ? { images, signal } : { signal });
     try { const lim = await s.limits(); AI.images = lim && lim.images ? lim.images : null; } catch (e) { AI.images = null; }
   } else {
-    AI.name = "Gemini";
-    AI.sample = { server: true }; AI.ask = directAsk;
+    try { const r = await fetch("api/health", { cache: "no-store" }); const j = await r.json(); if (!j || !j.recognize) return; AI.name = ({ gemini: "Gemini", anthropic: "Claude" })[j.provider] || "Sun’iy intellekt"; } catch (e) { return; }
+    AI.sample = { server: true }; AI.ask = serverAsk;
     AI.images = { maxCount: 1, maxInputBytes: 25 * 1048576, mediaTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"] };
   }
   $("#inkBar").hidden = false;
