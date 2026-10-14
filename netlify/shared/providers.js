@@ -1,12 +1,40 @@
-// Sun'iy intellekt provayderlari: Gemini (Google) yoki Claude (Anthropic).
-// Tanlash: DT_PROVIDER = gemini | anthropic. Berilmasa — qaysi kalit bor bo'lsa o'sha (avval Gemini).
+// Sun'iy intellekt provayderlari: Gemini (Google), Claude (Anthropic) yoki Groq.
+// Tanlash: DT_PROVIDER = gemini | anthropic | groq. Berilmasa — qaysi kalit bor bo'lsa o'sha (tartib: Gemini, Claude, Groq).
+// ZAXIRA: asosiy provayder xato bersa (429, 5xx, bo'sh javob va h.k.), kaliti bor keyingi provayderga avtomatik o'tiladi.
 export function pickProvider(env) {
   const want = (env("DT_PROVIDER") || "").toLowerCase();
-  const g = env("GEMINI_API_KEY"), a = env("ANTHROPIC_API_KEY");
+  const g = env("GEMINI_API_KEY"), a = env("ANTHROPIC_API_KEY"), q = env("GROQ_API_KEY");
   const model = env("DT_MODEL");
-  if ((want === "gemini" || (!want && g)) && g) return { name: "gemini", key: g.trim(), model: model || "gemini-3.8-flash", modelFixed: Boolean(model && env("DT_MODEL_STRICT")), call: callGemini };
-  if ((want === "anthropic" || (!want && a)) && a) return { name: "anthropic", key: a, model: model || "claude-sonnet-5-5", call: callAnthropic };
-  return null;
+  const all = [];
+  if (g) all.push({ name: "gemini", key: g.trim(), model: model || "gemini-3.8-flash", modelFixed: Boolean(model && env("DT_MODEL_STRICT")), call: callGemini });
+  if (a) all.push({ name: "anthropic", key: a.trim(), model: model || "claude-sonnet-5-5", call: callAnthropic });
+  // Groq modeli alohida GROQ_MODEL o'zgaruvchisidan olinadi (DT_MODEL Gemini/Claude nomi bo'lishi mumkin)
+  if (q) all.push({ name: "groq", key: q.trim(), model: env("GROQ_MODEL") || GROQ_DEFAULT_MODEL, call: callGroq });
+  if (!all.length) return null;
+  // DT_PROVIDER ko'rsatilgan va uning kaliti bor bo'lsa — u birinchi, qolganlari zaxira
+  let chain = all;
+  const first = all.find((x) => x.name === want);
+  if (first) chain = [first, ...all.filter((x) => x !== first)];
+  const primary = chain[0];
+  return { ...primary, chain, call: callChain };
+}
+
+// Zanjir bo'ylab ketma-ket urinadi; hammasi yiqilsa — birinchi (asosiy) provayderning xatosini qaytaradi.
+async function callChain(p, prompt, image) {
+  let firstErr = null;
+  const notes = [];
+  for (const q of p.chain) {
+    try {
+      const out = await q.call(q, prompt, image);
+      if (firstErr) console.log("zaxira ishladi:", q.name, "(asosiy xato:", firstErr.code, ")");
+      return out;
+    } catch (e) {
+      console.log(q.name + " yiqildi:", e && e.code, String((e && (e.detail || e.message)) || "").slice(0, 200));
+      if (!firstErr) firstErr = e instanceof ProviderError ? e : new ProviderError("upstream_error", String((e && e.message) || e));
+      notes.push(q.name + ": " + String((e && (e.detail || e.code)) || "").replace(/\s+/g, " ").slice(0, 80));
+    }
+  }
+  throw new ProviderError(firstErr.code, notes.join(" | "));
 }
 
 export class ProviderError extends Error { constructor(code, detail) { super(code); this.code = code; this.detail = detail; } }
@@ -78,5 +106,19 @@ async function callAnthropic(p, prompt, image) {
     { model: p.model, max_tokens: 2500, messages: [{ role: "user", content }] });
   const text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
   if (!text) throw new ProviderError("empty_completion", "bo'sh javob");
+  return text;
+}
+
+// Groq (OpenAI-mos API). Rasm uchun vision modeli kerak — standart: Llama 4 Scout.
+// Model nomi o'zgarsa, Netlify'da GROQ_MODEL o'zgaruvchisi bilan almashtiring (console.groq.com/docs/models).
+const GROQ_DEFAULT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+async function callGroq(p, prompt, image) {
+  const content = [{ type: "text", text: prompt }];
+  if (image) content.push({ type: "image_url", image_url: { url: "data:" + image.mime + ";base64," + image.data } });
+  const j = await post("https://api.groq.com/openai/v1/chat/completions", { authorization: "Bearer " + p.key },
+    { model: p.model, messages: [{ role: "user", content }], temperature: 0.1, max_tokens: 4096 });
+  const c = (j.choices || [])[0];
+  const text = c && c.message && typeof c.message.content === "string" ? c.message.content : "";
+  if (!text) throw new ProviderError("empty_completion", c ? String(c.finish_reason) : "no choice");
   return text;
 }
