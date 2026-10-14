@@ -2837,9 +2837,9 @@ async function serverAsk(kind, text, images, signal) {
   if (images) { image = await shrinkImage(images); if (!image) throw { code: "image_rejected" }; }
   let r;
   try { r = await fetch("api/recognize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, text, image }), signal }); }
-  catch (e) { throw { code: e && e.name === "AbortError" ? "cancelled" : "upstream_error" }; }
+  catch (e) { throw { code: e && e.name === "AbortError" ? "cancelled" : "upstream_error", detail: "tarmoq: " + String(e && e.message || e).slice(0, 120) }; }
   let j = null; try { j = await r.json(); } catch (e) {}
-  if (!r.ok || !j || j.error) throw { code: (j && j.error) || (r.status === 429 ? "rate_limited" : "upstream_error") };
+  if (!r.ok || !j || j.error) throw { code: (j && j.error) || (r.status === 429 ? "rate_limited" : "upstream_error"), detail: (j && j.detail) || ("HTTP " + r.status) };
   return j;
 }
 (async () => {
@@ -2935,7 +2935,7 @@ async function recognize(kind, textOverride) {
   } catch (e) {
     const code = e && e.code;
     if (code === "not_granted" || code === "sampling_disabled" || code === "not_declared" || code === "capability_disabled") { $("#inkBar").hidden = true; $("#ink").hidden = true; }
-    const msg = code === "cancelled" ? "" : AI_ERR[code] || AI_ERR.upstream_error;
+    const msg = code === "cancelled" ? "" : (AI_ERR[code] || AI_ERR.upstream_error) + (e && e.detail ? " [" + e.detail + "]" : "");
     if (kind === "text") { if (msg) renderError({ message: msg, suggest: "", src: "", pos: 0 }, ""); else $("#out").innerHTML = ""; }
     else inkStatus(msg, msg ? "bad" : "");
   } finally { AI.ctl = null; $("#recStop").hidden = true; updateRecBtn(); }
