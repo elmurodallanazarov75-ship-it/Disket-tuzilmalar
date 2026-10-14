@@ -1473,6 +1473,7 @@ function rfAnalyze(raw) {
   return out;
 }
 function rfTopic(raw) {
+  if (relConsParse(raw)) return "relation";
   const R = rfAnalyze(raw); const tup = R.defs.filter((d) => /\{\s*\(/.test(d.rhs) || /\|/.test(d.rhs) || /×/.test(d.rhs));
   if (Object.keys(R.sigs).length || Object.keys(R.formulas).length || tup.some((d) => /^[a-z]/.test(d.name)) || (tup.length && FUN_WORDS.test(R.low))) return "function";
   if (tup.length && (REL_WORDS.test(R.low) || !R.queries.some((q) => /[∪∩∖△×⊆⊂⊇⊃∈∉ᶜ|]/.test(q)))) return "relation";
@@ -1615,6 +1616,132 @@ function RelationEngine(raw, info) {
     bool: asked.length ? asked.every((k) => res[k].ok) : undefined };
   sol.verify = { ok: vOk, text: "Xossalar ikkinchi marta mustaqil usul — M(" + rname + ") matritsasi orqali tekshirildi: refleksivlik ⇔ diagonal 1 lardan iborat; simmetriklik ⇔ M = Mᵀ; antisimmetriklik ⇔ M ∧ Mᵀ ≤ I; tranzitivlik ⇔ M ⊙ M ≤ M. " + (vOk ? "Barcha natijalar mos keldi." : "MOS KELMAGAN natija bor.") + (isEq ? " Ekvivalentlik sinflari " + Aname + " ni kesishmaydigan qismlarga to‘liq bo‘lishi tekshirildi." : "") + (isPo ? " Hasse qoplashlarining refleksiv-tranzitiv yopilmasi " + rname + " ga tengligi tekshirildi." : "") };
   if (n <= 14) sol.visuals.push({ title: "Yo‘naltirilgan graf", html: digraphSVG(els, pairs) });
+  return [finish(sol)];
+}
+
+/* ===================== 9e-2. «Misol keltiring» turidagi munosabat masalalari ===================== */
+/* Masalan: A = {a,b,c} to‘plamda refleksiv va tranzitiv, lekin simmetrik bo‘lmagan munosabat tuzing. */
+const RC_WORDS = [["antirefleksiv", /antirefleksiv|irrefleksiv/], ["asimmetrik", /asimmetrik/], ["antisimmetrik", /antisimmetrik/], ["refleksiv", /refleksiv/], ["simmetrik", /simmetrik/], ["tranzitiv", /tranzitiv/]];
+const RC_DEFAULT = { 1: "refleksiv", 2: "simmetrik", 3: "tranzitiv", 4: "antisimmetrik" };
+const RC_TRIGGER = /misol\s+(keltir|tuz|qur|toping|bering)|munosabat\s+(tuz|qur|keltir|toping|bering)|bajarilsin|bajarilmasin|bo'lsin|bo'lmasin|tuzing|quring|keltiring|qanoatlantir|ega\s+bo'l/;
+function relConsParse(raw) {
+  const R = rfAnalyze(raw);
+  if (R.decl || R.defs.some((d) => /\{\s*\(/.test(d.rhs) || /\|/.test(d.rhs) || /×/.test(d.rhs))) return null;
+  const low = lowerUz(raw);
+  if (!RC_TRIGGER.test(low)) return null;
+  const setDef = R.defs.find((d) => /^[A-Z]/.test(d.name) && /^\{/.test(d.rhs));
+  const legend = {}, rest = [];
+  low.split(/\n|;/).forEach((ln) => {
+    const m = /^\s*(\d)\s*[-–.):]\s*(.+)$/.exec(ln);
+    if (m && !/bajarilsin|bajarilmasin|emas/.test(m[2])) { const p = RC_WORDS.find(([, re]) => re.test(m[2])); if (p) { legend[m[1]] = p[0]; return; } }
+    rest.push(ln);
+  });
+  const text = rest.join(" ; "), req = {}; let usedDefault = false;
+  const setReq = (p, v) => { if (req[p] !== undefined && req[p] !== v) throw new DTError("«" + p + "» xossasi ham bajarilsin, ham bajarilmasin deb berilgan", 0, "Shartlarni tekshiring", raw); req[p] = v; };
+  const numRe = /(\d+(?:\s*(?:,|va)\s*\d+)*)\s*-?\s*(?:shart\w*|xossa\w*)?\s*(bajarilsin|bajarilmasin)/g; let m;
+  while ((m = numRe.exec(text))) {
+    m[1].split(/\s*(?:,|va)\s*/).forEach((d) => {
+      let p = legend[d]; if (!p && RC_DEFAULT[d]) { p = RC_DEFAULT[d]; usedDefault = true; }
+      if (!p) throw new DTError(d + "-shart qaysi xossa ekani noma’lum", 0, "Ro‘yxatni qo‘shing, masalan:\n1 - refleksiv\n2 - simmetrik\n3 - tranzitiv", raw);
+      setReq(p, m[2] === "bajarilsin");
+    });
+  }
+  if (!Object.keys(req).length) text.split(/[,;]|\bva\b|\bhamda\b/).forEach((cl) => {
+    const p = RC_WORDS.find(([, re]) => re.test(cl)); if (!p) return;
+    setReq(p[0], !/\bemas|bo'lmas|bajarilmas|\bnot\b|¬/.test(cl));
+  });
+  if (!Object.keys(req).length) return null;
+  return { req, setName: setDef ? setDef.name : null, usedDefault, legend };
+}
+function rcProps(get, m) {
+  let ref = true, irr = true, sym = true, anti = true, asym = true, tr = true;
+  for (let i = 0; i < m; i++) { if (get(i, i)) irr = false; else ref = false; }
+  for (let i = 0; i < m; i++) for (let j = 0; j < m; j++) if (get(i, j)) {
+    if (!get(j, i)) sym = false;
+    if (get(j, i)) { asym = false; if (i !== j) anti = false; }
+    for (let k = 0; k < m; k++) if (get(j, k) && !get(i, k)) tr = false;
+  }
+  return { refleksiv: ref, antirefleksiv: irr, simmetrik: sym, antisimmetrik: anti, asimmetrik: asym, tranzitiv: tr };
+}
+function RelationConstructEngine(raw) {
+  const P = relConsParse(raw), R0 = rfAnalyze(raw);
+  if (!P.setName) throw new DTError("Munosabat qaysi to‘plamda tuzilishi ko‘rsatilmagan", 0, "A = {a, b, c}\nMisol keltiring: refleksiv, tranzitiv, simmetrik emas", raw);
+  const { env, given } = rfEvalDefs(R0);
+  const A = env.get(P.setName), els = A.items, n = els.length, Aname = P.setName, rname = "R";
+  if (!n) throw new DTError(Aname + " bo‘sh to‘plam — undan munosabat tuzib bo‘lmaydi", 0, "A = {a, b, c}", raw);
+  const req = P.req, keys = Object.keys(req);
+  const LBL = { refleksiv: "refleksiv", antirefleksiv: "antirefleksiv", simmetrik: "simmetrik", antisimmetrik: "antisimmetrik", asimmetrik: "asimmetrik", tranzitiv: "tranzitiv" };
+  const sol = base("relation", { expr: Aname + " da " + rname + ": " + keys.map((k) => LBL[k] + (req[k] ? "" : " emas")).join(", "), text: R0.texts.join(" ") }, null);
+  sol.problemTex = texId(rname) + "\\subseteq " + texId(Aname) + "\\times " + texId(Aname);
+  sol.given = given; sol.concepts = ["munosabat", ...keys];
+  sol.find = Aname + " to‘plamda quyidagi xossalarga ega " + rname + " munosabatini tuzish";
+  if (P.usedDefault) sol.notes.push("Shartlar raqamlari ro‘yxati berilmagani uchun standart tartib olindi: 1 — refleksivlik, 2 — simmetriklik, 3 — tranzitivlik, 4 — antisimmetriklik. Ustozingiz ro‘yxati boshqacha bo‘lsa, xossalarni so‘z bilan yozing.");
+  // qidiruv: dastlabki m ta element ustida to‘liq saralash
+  const m = Math.min(n, 4), total = 1 << (m * m), matches = [];
+  for (let mask = 0; mask < total; mask++) {
+    const pr = rcProps((i, j) => (mask >> (i * m + j)) & 1, m);
+    if (keys.every((k) => pr[k] === req[k])) matches.push(mask);
+  }
+  const idxs = (mask) => { const r = []; for (let b = 0; b < m * m; b++) if ((mask >> b) & 1) r.push(b); return r; };
+  const cmp = (x, y) => { const a = idxs(x), b = idxs(y); if (a.length !== b.length) return a.length - b.length; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i]; return 0; };
+  matches.sort(cmp);
+  const reqLines = keys.map((k) => LBL[k] + (req[k] ? " ✓ bajarilsin" : " ✗ bajarilmasin"));
+  sol.steps.push({ title: "Shartlarni aniqlash", concept: "munosabat", text: Aname + " = " + fmt(A) + " to‘plamda " + rname + " ⊆ " + Aname + " × " + Aname + " munosabat kerak. Talablar: " + reqLines.join("; ") + "." });
+  if (!matches.length) {
+    const exact = n <= 4;
+    sol.steps.push({ title: "Qidiruv", concept: "munosabat", text: exact ? Aname + " ning barcha 2^" + (n * n) + " = " + total + " ta munosabati tekshirildi — talablarni birga qanoatlantiradigani yo‘q." : "Dastlabki 4 ta element ustida barcha " + total + " ta munosabat tekshirildi — mos keladigani topilmadi." });
+    sol.answer = { text: exact ? "Bunday munosabat " + Aname + " to‘plamda mavjud emas." : "Bunday munosabat topilmadi (talablar o‘zaro zid bo‘lishi mumkin).", tex: "\\text{" + (exact ? "mavjud emas" : "topilmadi") + "}" };
+    sol.verify = { ok: true, text: exact ? "To‘liq saralash natijasi: mos munosabatlar soni 0." : "Qidiruv chegaralangan (4 element)." };
+    return [finish(sol)];
+  }
+  const build = (mask) => {
+    const pairs = []; idxs(mask).forEach((b) => pairs.push([els[Math.floor(b / m)], els[b % m]]));
+    if (n > m && req.refleksiv === true) for (let i = m; i < n; i++) pairs.push([els[i], els[i]]);
+    return pairs;
+  };
+  const pairs = build(matches[0]);
+  const pk = (a, b) => key(a) + "→" + key(b), P2 = new Set(pairs.map(([a, b]) => pk(a, b)));
+  const in2 = (a, b) => P2.has(pk(a, b)), fp = (a, b) => "(" + fmt(a) + ", " + fmt(b) + ")";
+  const Rtex = texId(rname) + " = " + texSetShort(mkSet(pairs.map((p) => mkTuple(p))), 30), Rtxt = rname + " = " + (pairs.length ? "{" + pairs.map(([a, b]) => fp(a, b)).join(", ") + "}" : "∅");
+  // xossalar bo‘yicha izoh va tekshirish (juftliklar bo‘yicha)
+  const res = {};
+  let bad = els.filter((a) => !in2(a, a));
+  res.refleksiv = { ok: !bad.length, why: !bad.length ? "barcha " + els.map((a) => fp(a, a)).slice(0, 8).join(", ") + (n > 8 ? ", …" : "") + " bor." : fp(bad[0], bad[0]) + " ∉ " + rname + "." };
+  bad = els.filter((a) => in2(a, a));
+  res.antirefleksiv = { ok: !bad.length, why: !bad.length ? "hech bir (a, a) yo‘q." : fp(bad[0], bad[0]) + " ∈ " + rname + "." };
+  let ce = pairs.find(([a, b]) => !in2(b, a));
+  res.simmetrik = { ok: !ce, why: !ce ? "har bir (a, b) bilan (b, a) ham bor." : fp(ce[0], ce[1]) + " ∈ " + rname + ", lekin " + fp(ce[1], ce[0]) + " ∉ " + rname + "." };
+  ce = pairs.find(([a, b]) => key(a) !== key(b) && in2(b, a));
+  res.antisimmetrik = { ok: !ce, why: !ce ? "a ≠ b uchun (a, b) va (b, a) birga uchramaydi." : fp(ce[0], ce[1]) + " va " + fp(ce[1], ce[0]) + " ikkalasi ham bor, lekin " + fmt(ce[0]) + " ≠ " + fmt(ce[1]) + "." };
+  ce = pairs.find(([a, b]) => in2(b, a));
+  res.asimmetrik = { ok: !ce, why: !ce ? "hech bir (a, b) uchun (b, a) yo‘q." : fp(ce[0], ce[1]) + (key(ce[0]) === key(ce[1]) ? " ∈ " + rname + " (asimmetrikda (a, a) bo‘lmaydi)." : " va " + fp(ce[1], ce[0]) + " ikkalasi ham bor.") };
+  ce = null; let chains = 0;
+  for (const [a, b] of pairs) { for (const [b2, c] of pairs) { if (key(b2) !== key(b)) continue; chains++; if (!in2(a, c)) { ce = [a, b, c]; break; } } if (ce) break; }
+  res.tranzitiv = { ok: !ce, why: !ce ? "(a, b), (b, c) ∈ " + rname + " bo‘lgan barcha " + chains + " ta holatda (a, c) ∈ " + rname + "." : fp(ce[0], ce[1]) + ", " + fp(ce[1], ce[2]) + " ∈ " + rname + ", lekin " + fp(ce[0], ce[2]) + " ∉ " + rname + "." };
+  const plan = keys.map((k) => ({
+    refleksiv: req[k] ? "Refleksivlik: har bir a uchun (a, a) kerak — diagonalni to‘liq kiritamiz." : "Refleksiv emas: kamida bitta (a, a) tushirib qoldiriladi.",
+    antirefleksiv: req[k] ? "Antirefleksivlik: hech qanday (a, a) kiritilmaydi." : "Antirefleksiv emas: kamida bitta (a, a) bo‘ladi.",
+    simmetrik: req[k] ? "Simmetriklik: (a, b) bilan birga (b, a) ham kiritiladi." : "Simmetrik emas: kamida bitta (a, b) kiritiladi, (b, a) esa yo‘q.",
+    antisimmetrik: req[k] ? "Antisimmetriklik: a ≠ b uchun (a, b) va (b, a) birga bo‘lmaydi." : "Antisimmetrik emas: kamida bitta a ≠ b uchun (a, b) va (b, a) ikkalasi ham bo‘ladi.",
+    asimmetrik: req[k] ? "Asimmetriklik: (a, b) bo‘lsa (b, a) yo‘q, (a, a) ham yo‘q." : "Asimmetrik emas: (a, a) yoki ikki tomonlama juftlik bo‘ladi.",
+    tranzitiv: req[k] ? "Tranzitivlik: (a, b), (b, c) bo‘lsa (a, c) ham bo‘lishi kerak." : "Tranzitiv emas: (a, b), (b, c) bor, lekin (a, c) yo‘q zanjir bo‘ladi.",
+  })[k]);
+  sol.steps.push({ title: "Qurish rejasi", concept: "munosabat", text: plan.join(" ") + " Barcha talablarni birga qanoatlantiradigan eng kichik munosabat tanlandi." });
+  sol.steps.push({ title: "Tanlangan munosabat", concept: "munosabat", text: Rtxt + " (" + pairs.length + " ta juftlik).", tex: Rtex });
+  const ALL = [["refleksiv", "Refleksivlik"], ["antirefleksiv", "Antirefleksivlik"], ["simmetrik", "Simmetriklik"], ["antisimmetrik", "Antisimmetriklik"], ["asimmetrik", "Asimmetriklik"], ["tranzitiv", "Tranzitivlik"]];
+  const sorted = [...keys.map((k) => [k, LBL[k]]).map(([k]) => ALL.find((x) => x[0] === k)), ...ALL.filter(([k]) => !keys.includes(k))];
+  sorted.forEach(([k, t]) => { const asked = keys.includes(k); sol.steps.push({ title: t + ": " + (res[k].ok ? "bajariladi ✓" : "bajarilmaydi ✗") + (asked ? (res[k].ok === req[k] ? " — talabga mos" : " — TALABGA ZID") : ""), concept: k, text: res[k].why }); });
+  // boshqa javoblar
+  const alt = []; [1, Math.floor(matches.length / 2)].forEach((i) => { if (i > 0 && i < matches.length && !alt.includes(matches[i])) alt.push(matches[i]); });
+  if (alt.length) sol.steps.push({ title: "Boshqa to‘g‘ri javoblar", concept: "munosabat", text: "Masalaning javobi yagona emas. Masalan: " + alt.map((mk) => "{" + build(mk).map(([a, b]) => fp(a, b)).join(", ") + "}").join("; ") + (n <= 4 ? ". Jami " + matches.length + " ta shunday munosabat bor." : ".") });
+  // mustaqil tekshirish: matritsa orqali
+  const M = els.map((a) => els.map((b) => in2(a, b)));
+  const pm = rcProps((i, j) => M[i][j], n);
+  const vOk = ALL.every(([k]) => pm[k] === res[k].ok) && keys.every((k) => pm[k] === req[k]);
+  sol.verify = { ok: vOk, text: "Natija M(" + rname + ") matritsasi orqali mustaqil tekshirildi: refleksivlik ⇔ diagonal 1 lardan iborat; simmetriklik ⇔ M = Mᵀ; tranzitivlik ⇔ M ⊙ M ≤ M. " + (vOk ? "Barcha talablar bajarildi." : "MOS KELMAGAN natija bor.") + (n <= 4 ? " Shuningdek, " + Aname + " dagi barcha " + total + " ta munosabat saralanib, tanlanganining eng kichikligi tasdiqlandi." : "") };
+  sol.visuals = [{ title: "Munosabat matritsasi M(" + rname + ")", html: matrixHTML(els, els, M, rname) }];
+  if (n <= 14) sol.visuals.push({ title: "Yo‘naltirilgan graf", html: digraphSVG(els, pairs) });
+  sol.answer = { text: Rtxt + ". " + keys.map((k) => LBL[k] + (res[k].ok ? " ✓" : " ✗")).join(", ") + ".", tex: Rtex + ",\\quad " + keys.map((k) => "\\text{" + LBL[k] + "}" + (res[k].ok ? "\\ \\checkmark" : "\\ \\times")).join(",\\ ") };
   return [finish(sol)];
 }
 
@@ -2304,7 +2431,7 @@ function solve(raw) {
   }
   if (topic === "recurrence") return RecurrenceEngine(raw);
   if (topic === "induction") return InductionEngine(raw);
-  if (topic === "relation") return RelationEngine(raw, { low: lowerUz(raw) });
+  if (topic === "relation") return relConsParse(raw) ? RelationConstructEngine(raw) : RelationEngine(raw, { low: lowerUz(raw) });
   if (topic === "function") return FunctionEngine(raw, { low: lowerUz(raw) });
   if (topic === "comb") return CombEngine(combFromText(normalize(raw)) || combFromText(raw), A.info);
   if (topic === "logic" || topic === "predicate" || topic === "equiv") {
@@ -2415,6 +2542,7 @@ const EX = [
   ["Bul algebrasi", "F = A·B + A·¬B soddalashtiring"],
   ["Predikat", "∀x(P(x) → Q(x)) inkorini toping"],
   ["Munosabat misoli", "A = {1,2,3,4,5,6}\nR = {(a,b) ∈ A × A | a ≡ b (mod 3)}\nEkvivalentlik munosabati ekanligini tekshiring"],
+  ["Munosabat tuzish", "A = {a,b,c}\\nMisol keltiring: refleksiv, tranzitiv, simmetrik emas"],
   ["Hasse diagrammasi", "A = {1,2,3,4,6,12}\nR = {(a,b) ∈ A × A | a | b}"],
   ["Funksiya misoli", "A = {1,2,3,4}\nB = {a,b,c}\nf: A → B\nf = {(1,a),(2,b),(3,c),(4,a)}\nFunksiya injektiv yoki syuryektiv ekanligini aniqlang"],
   ["Rekurrent misoli", "aₙ = aₙ₋₁ + aₙ₋₂, a₀ = 0, a₁ = 1"],
@@ -2677,6 +2805,7 @@ LOGIC: lowercase variables p q r; operators ¬ ∧ ∨ ⊕ → ↔. Example "(p 
 PREDICATES: "∀x(P(x) → Q(x))"; append " inkorini toping" if negation is asked.
 COMBINATORICS: decide the formula yourself: C(n,k) (order irrelevant), A(n,k) (order matters), n! (arrangements). Example "C(10,3)".
 RELATIONS: "A = {1,2,3}\\nR = {(1,1),(1,2),(2,2)}" or with a condition "R = {(a,b) ∈ A × A | a ≤ b}" (condition may use a | b for divisibility, a ≡ b (mod 3), + - * mod, < ≤ > ≥ = ≠, ∧ ∨). Optional last line like "Bu munosabat refleksiv va tranzitivmi?". For R ⊆ A × B add line "R ⊆ A × B".
+RELATION CONSTRUCTION (the task asks to BUILD or GIVE AN EXAMPLE of a relation with stated properties and NO relation is given): write the set, then ONE line with the property words refleksiv, antirefleksiv, simmetrik, antisimmetrik, asimmetrik, tranzitiv; add "emas" after each property that must FAIL. Example: "A = {a,b,c}\\nMisol keltiring: refleksiv, tranzitiv, simmetrik emas". If the problem refers to numbered conditions ("1, 3-shartlar bajarilsin, 2-shart bajarilmasin") and the list of conditions is not visible, assume 1 = refleksiv, 2 = simmetrik, 3 = tranzitiv, 4 = antisimmetrik, write the property words, and state this assumption in note. topic = relation.
 FUNCTIONS: "A = {1,2,3}\\nB = {a,b,c}\\nf: A → B\\nf = {(1,a),(2,b),(3,c)}" or formula "f(x) = 2x + 1". Query lines: "g ∘ f", "f⁻¹", "f(2)", "f({1,2})", "f⁻¹({a})"; or the sentence "injektiv yoki syuryektiv ekanligini aniqlang".
 RECURRENCE: "aₙ = aₙ₋₁ + aₙ₋₂, a₀ = 0, a₁ = 1" (also a_n, a_{n-1}).
 INDUCTION: sums with explicit first terms "1 + 2 + ... + n = n(n+1)/2" or "\\sum_{k=1}^{n} k^3 = (n(n+1)/2)^2"; divisibility "6 | n^3 - n"; start value "(n ≥ 4)".
