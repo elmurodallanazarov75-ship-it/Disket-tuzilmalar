@@ -56,7 +56,7 @@ export default async (req, context) => {
 
   let out;
   try { out = await prov.call(prov, prompt, image); }
-  catch (e) { console.log(prov.name + " API xatosi:", e.code, e.detail || ""); return err(e.code || "upstream_error", e.code === "rate_limited" ? 429 : 502); }
+  catch (e) { console.log(prov.name + " API xatosi:", e.code, e.detail || e.message || ""); return Response.json({ error: e.code || "upstream_error", detail: String(e.detail || e.message || "").slice(0, 300) }, { status: e.code === "rate_limited" ? 429 : 502 }); }
 
   let data;
   try { data = parseJson(out); } catch (_) { return err("invalid_json", 502); }
