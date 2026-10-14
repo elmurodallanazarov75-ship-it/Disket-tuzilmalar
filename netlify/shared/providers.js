@@ -35,17 +35,20 @@ async function callGemini(p, prompt, image) {
   if (image) parts.push({ inline_data: { mime_type: image.mime, data: image.data } });
   parts.push({ text: prompt });
   const body = { contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.1, maxOutputTokens: 8192 } };
-  const hosts = p.key.startsWith("AQ.") ? ["vertex", "studio"] : ["studio", "vertex"];
+  const hosts = ["studio", "vertex"]; // Studio birinchi: diag natijasida AQ. kalit ham shu yerda ishlagan; Vertex ko'pincha 403 beradi
   const models = p.modelFixed ? [p.model] : GEMINI_MODELS;
   const tries = [];
   if (working) tries.push(working);
   for (const h of hosts) for (const m of models) if (!working || working.host !== h || working.model !== m) tries.push({ host: h, model: m });
   let j = null, firstErr = null;
+  const deadHosts = new Set(); // 401/403 bergan manzil qolgan modellar bilan qayta sinalmaydi
   for (const t of tries.slice(0, 8)) {
+    if (deadHosts.has(t.host)) continue;
     try { j = await post(GEMINI_HOSTS[t.host](t.model), { "x-goog-api-key": p.key }, body); working = t; break; }
     catch (e) {
       if (e.code === "rate_limited") throw e;
       if (!firstErr) firstErr = e;
+      if (/^40[13]\b/.test(e.detail || "")) { deadHosts.add(t.host); working = working && working.host === t.host ? null : working; }
       console.log("gemini urinish:", t.host, t.model, e.detail || e.code);
     }
   }
