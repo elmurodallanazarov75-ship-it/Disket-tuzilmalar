@@ -1,8 +1,8 @@
 // POST /api/recognize — rasm yoki erkin matndagi masalani platforma sintaksisiga o‘giradi.
 // Masalani yechish brauzerdagi engine'larda qoladi; bu funksiya faqat yozuvni o‘qiydi.
 // Netlify → Project configuration → Environment variables:
-//   GEMINI_API_KEY yoki ANTHROPIC_API_KEY (bittasi majburiy)
-//   DT_PROVIDER (ixtiyoriy: gemini | anthropic), DT_MODEL (ixtiyoriy)
+//   GEMINI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY (kamida bittasi majburiy; bir nechta bo'lsa, biri yiqilganda keyingisiga o'tiladi)
+//   DT_PROVIDER (ixtiyoriy: gemini | anthropic | groq — asosiy provayder), DT_MODEL (ixtiyoriy), GROQ_MODEL (ixtiyoriy)
 //   DT_RATE_PER_HOUR (ixtiyoriy, standart 30 — bir IP uchun, taxminiy cheklov)
 import PROMPTS from "../shared/prompts.js";
 import { pickProvider } from "../shared/providers.js";
