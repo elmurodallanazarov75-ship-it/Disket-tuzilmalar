@@ -1,5 +1,5 @@
 // Sun'iy intellekt provayderlari: Gemini (Google), Claude (Anthropic) yoki Groq.
-// Tanlash: DT_PROVIDER = gemini | anthropic | groq. Berilmasa — qaysi kalit bor bo'lsa o'sha (tartib: Gemini, Claude, Groq).
+// Tanlash: DT_PROVIDER = gemini | anthropic | groq. Berilmasa — qaysi kalit bor bo'lsa o'sha (tartib: Gemini, Groq, Claude).
 // ZAXIRA: asosiy provayder xato bersa (429, 5xx, bo'sh javob va h.k.), kaliti bor keyingi provayderga avtomatik o'tiladi.
 export function pickProvider(env) {
   const want = (env("DT_PROVIDER") || "").toLowerCase();
@@ -7,9 +7,9 @@ export function pickProvider(env) {
   const model = env("DT_MODEL");
   const all = [];
   if (g) all.push({ name: "gemini", key: g.trim(), model: model || "gemini-3.8-flash", modelFixed: Boolean(model && env("DT_MODEL_STRICT")), call: callGemini });
-  if (a) all.push({ name: "anthropic", key: a.trim(), model: model || "claude-sonnet-5-5", call: callAnthropic });
   // Groq modeli alohida GROQ_MODEL o'zgaruvchisidan olinadi (DT_MODEL Gemini/Claude nomi bo'lishi mumkin)
   if (q) all.push({ name: "groq", key: q.trim(), model: env("GROQ_MODEL") || GROQ_DEFAULT_MODEL, call: callGroq });
+  if (a) all.push({ name: "anthropic", key: a.trim(), model: model || "claude-sonnet-5-5", call: callAnthropic });
   if (!all.length) return null;
   // DT_PROVIDER ko'rsatilgan va uning kaliti bor bo'lsa — u birinchi, qolganlari zaxira
   let chain = all;
@@ -109,16 +109,21 @@ async function callAnthropic(p, prompt, image) {
   return text;
 }
 
-// Groq (OpenAI-mos API). Rasm uchun vision modeli kerak — standart: Llama 4 Scout.
-// Model nomi o'zgarsa, Netlify'da GROQ_MODEL o'zgaruvchisi bilan almashtiring (console.groq.com/docs/models).
-const GROQ_DEFAULT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+// Groq (OpenAI-mos API). Rasm uchun vision modeli kerak — hozirgi: Qwen 3.8 27B (console.groq.com/docs/vision).
+// Model nomi o'zgarsa, kodni tahrirlamasdan Netlify'da GROQ_MODEL o'zgaruvchisi bilan almashtirish mumkin.
+const GROQ_DEFAULT_MODEL = "qwen/qwen3.8-27b";
 async function callGroq(p, prompt, image) {
   const content = [{ type: "text", text: prompt }];
   if (image) content.push({ type: "image_url", image_url: { url: "data:" + image.mime + ";base64," + image.data } });
-  const j = await post("https://api.groq.com/openai/v1/chat/completions", { authorization: "Bearer " + p.key },
-    { model: p.model, messages: [{ role: "user", content }], temperature: 0.1, max_tokens: 4096 });
+  const base = { model: p.model, messages: [{ role: "user", content }], temperature: 0.1, max_completion_tokens: 8192 };
+  const hdr = { authorization: "Bearer " + p.key };
+  const url = "https://api.groq.com/openai/v1/chat/completions";
+  let j;
+  try { j = await post(url, hdr, { ...base, response_format: { type: "json_object" } }); }       // JSON rejimi (toza JSON)
+  catch (e) { if (e.code !== "refused") throw e; j = await post(url, hdr, base); }                 // 400 bo'lsa, JSON rejimisiz qayta
   const c = (j.choices || [])[0];
-  const text = c && c.message && typeof c.message.content === "string" ? c.message.content : "";
+  let text = c && c.message && typeof c.message.content === "string" ? c.message.content : "";
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, "").trim(); // "o'ylash" bloki bo'lsa, olib tashlaymiz
   if (!text) throw new ProviderError("empty_completion", c ? String(c.finish_reason) : "no choice");
   return text;
 }
