@@ -32,13 +32,22 @@ function parseJson(text) {
   throw new Error("no json");
 }
 
+let stage = "start";
 export default async (req, context) => {
+  stage = "start";
+  try { return await handle(req, context); }
+  catch (e) { console.log("recognize crash @", stage, e && (e.stack || e.message || e)); return Response.json({ error: "upstream_error", detail: "server @" + stage + ": " + String((e && (e.message || e)) || "?").slice(0, 200) }, { status: 500 }); }
+};
+
+async function handle(req, context) {
   if (req.method !== "POST") return err("invalid_request", 405);
+  stage = "provider";
   const prov = pickProvider((k) => Netlify.env.get(k));
   if (!prov) return err("sampling_disabled", 503);
   const limit = Number(Netlify.env.get("DT_RATE_PER_HOUR") || 30);
   if (!rateOk(context.ip || "?", limit)) return err("rate_limited", 429);
 
+  stage = "body";
   let body;
   try { body = await req.json(); } catch (_) { return err("invalid_request"); }
   const kind = body && body.kind, text = typeof body?.text === "string" ? body.text : "";
@@ -54,10 +63,12 @@ export default async (req, context) => {
     prompt = PROMPTS.text_before + text.slice(0, 6000) + PROMPTS.text_after;
   } else return err("invalid_request");
 
+  stage = "ai-call";
   let out;
   try { out = await prov.call(prov, prompt, image); }
   catch (e) { console.log(prov.name + " API xatosi:", e.code, e.detail || e.message || ""); return Response.json({ error: e.code || "upstream_error", detail: String(e.detail || e.message || "").slice(0, 300) }, { status: e.code === "rate_limited" ? 429 : 502 }); }
 
+  stage = "parse";
   let data;
   try { data = parseJson(out); } catch (_) { return err("invalid_json", 502); }
 
@@ -68,6 +79,6 @@ export default async (req, context) => {
     note: String(p.note ?? "").slice(0, 500),
   }));
   return Response.json({ problems, unclear: String(data?.unclear ?? "").slice(0, 500) });
-};
+}
 
 export const config = { path: "/api/recognize", method: "POST" };
