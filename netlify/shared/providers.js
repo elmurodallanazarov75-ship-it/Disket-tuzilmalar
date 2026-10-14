@@ -42,17 +42,27 @@ async function callGemini(p, prompt, image) {
   for (const h of hosts) for (const m of models) if (!working || working.host !== h || working.model !== m) tries.push({ host: h, model: m });
   let j = null, firstErr = null;
   const deadHosts = new Set(); // 401/403 bergan manzil qolgan modellar bilan qayta sinalmaydi
-  for (const t of tries.slice(0, 8)) {
-    if (deadHosts.has(t.host)) continue;
-    try { j = await post(GEMINI_HOSTS[t.host](t.model), { "x-goog-api-key": p.key }, body); working = t; break; }
-    catch (e) {
-      if (e.code === "rate_limited") throw e;
-      if (!firstErr) firstErr = e;
-      if (/^40[13]\b/.test(e.detail || "")) { deadHosts.add(t.host); working = working && working.host === t.host ? null : working; }
-      console.log("gemini urinish:", t.host, t.model, e.detail || e.code);
+  const errs = [];             // har bir urinish natijasi (xato tafsiloti uchun)
+  let sawBusy = false;
+  for (let round = 0; round < 2 && !j; round++) {
+    if (round) await new Promise((r) => setTimeout(r, 2000)); // band bo'lsa, 2 soniya kutib qayta urinamiz
+    let anyBusy = false;
+    for (const t of tries.slice(0, 8)) {
+      if (deadHosts.has(t.host)) continue;
+      try { j = await post(GEMINI_HOSTS[t.host](t.model), { "x-goog-api-key": p.key }, body); working = t; break; }
+      catch (e) {
+        if (e.code === "rate_limited") throw e;
+        if (!firstErr) firstErr = e;
+        const d = String(e.detail || e.code || "");
+        if (/^5\d\d\b/.test(d)) { anyBusy = true; sawBusy = true; }
+        if (/^40[13]\b/.test(d)) { deadHosts.add(t.host); working = working && working.host === t.host ? null : working; }
+        errs.push(t.model + ": " + d.replace(/\s+/g, " ").slice(0, 70));
+        console.log("gemini urinish:", t.host, t.model, d.slice(0, 200));
+      }
     }
+    if (j || !anyBusy) break;
   }
-  if (!j) throw firstErr || new ProviderError("upstream_error");
+  if (!j) { working = null; throw new ProviderError(sawBusy ? "busy" : (firstErr ? firstErr.code : "upstream_error"), errs.slice(-3).join(" | ")); }
   if (j.promptFeedback && j.promptFeedback.blockReason) throw new ProviderError("refused", j.promptFeedback.blockReason);
   const c = (j.candidates || [])[0];
   const text = ((c && c.content && c.content.parts) || []).filter((x) => !x.thought && typeof x.text === "string").map((x) => x.text).join("");
