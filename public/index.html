@@ -904,6 +904,31 @@ function memb(n, x, C) {
 }
 function hasNode(n, f) { if (!n) return false; if (f(n)) return true; return ["l", "r", "x"].some((k) => n[k] && hasNode(n[k], f)); }
 
+/* Soddalashtirish: Venn sohalari (bit-maska) bo‘yicha eng qisqa teng ifodani topadi. Bu faqat ≤3 to‘plamli simvolik rejim uchun. */
+function opCount(n) { return n.t === "name" ? 0 : n.t === "comp" ? 1 + opCount(n.x) : n.t === "bin" ? 1 + opCount(n.l) + opCount(n.r) : 99; }
+function simplestSetExpr(names, regs) {
+  const k = names.length, N = 1 << k, full = (1 << N) - 1;
+  let target = 0; regs.forEach((m) => (target |= 1 << m));
+  if (target === 0) return { konst: "∅", cost: 0 };
+  if (target === full) return { konst: "U", cost: 0 };
+  const best = new Map(), byCost = [[]];
+  const add = (c, mask, ast) => { if (mask === 0 || mask === full || best.has(mask)) return; const e = { mask, ast, cost: c }; best.set(mask, e); (byCost[c] = byCost[c] || []).push(e); };
+  names.forEach((nm, j) => { let msk = 0; for (let m = 0; m < N; m++) if ((m >> j) & 1) msk |= 1 << m; add(0, msk, { t: "name", name: nm }); });
+  for (let c = 1; c <= 9 && !best.has(target); c++) {
+    byCost[c] = byCost[c] || [];
+    for (const e of byCost[c - 1]) add(c, full ^ e.mask, { t: "comp", x: e.ast });
+    for (let i = 0; i <= c - 1; i++) {
+      const j = c - 1 - i;
+      for (const a of byCost[i] || []) for (const e of byCost[j] || []) {
+        add(c, (a.mask | e.mask) & full, { t: "bin", op: "∪", l: a.ast, r: e.ast });
+        add(c, a.mask & e.mask, { t: "bin", op: "∩", l: a.ast, r: e.ast });
+        add(c, a.mask & ~e.mask & full, { t: "bin", op: "∖", l: a.ast, r: e.ast });
+      }
+    }
+  }
+  return best.get(target) || null;
+}
+
 function solveSetQuery(q, env, U, given, defined, uImplicit, info) {
   const ast = parseSet(q.expr, defined);
   const names = setNames(ast);
@@ -919,15 +944,28 @@ function solveSetQuery(q, env, U, given, defined, uImplicit, info) {
     sol.symbolic = true;
     sol.find = "Ifodaning to‘plamlar algebrasidagi ma’nosi va Venn diagrammasidagi sohasi";
     sol.steps.push({ title: "Ta’rif bo‘yicha a’zolik sharti", concept: "universal", text: "Elementlar berilmagan, shuning uchun ifoda ta’rif orqali — x element qachon natijaga tegishli bo‘lishi orqali yoziladi.", tex: sTex(ast) + " = \\{\\, x \\mid " + sCond(ast, true) + " \\,\\}" });
+    let simp = null;
     if (names.length <= 3) {
       const regs = []; const k = names.length;
       for (let m = 0; m < 1 << k; m++) { const a = {}; names.forEach((nm, j) => (a[nm] = !!((m >> j) & 1))); if (boolSet(ast, a)) regs.push(m); }
       const regName = (m) => names.map((nm, j) => ((m >> j) & 1 ? nm : nm + "ᶜ")).join(" ∩ ");
       sol.steps.push({ title: "Venn diagrammasidagi sohalar", concept: "venn", text: names.length + " ta to‘plam U ni 2^" + k + " = " + (1 << k) + " ta elementar sohaga bo‘ladi. Har bir soha uchun shart tekshirildi; bo‘yaladigan sohalar: " + (regs.map(regName).join(";  ") || "hech biri (bo‘sh to‘plam)") + "." });
       sol.venn = vennSVG(names, (a) => boolSet(ast, a), null, true);
+      try {
+        const s = simplestSetExpr(names, regs);
+        if (s && (s.konst || s.cost < opCount(ast))) {
+          let same = true; // xavfsizlik: soddalashtirilgan ifoda barcha sohalarda asl ifoda bilan bir xil bo‘lishi shart
+          if (!s.konst) for (let m = 0; m < 1 << k; m++) { const a = {}; names.forEach((nm, j) => (a[nm] = !!((m >> j) & 1))); if (!!boolSet(s.ast, a) !== !!boolSet(ast, a)) same = false; }
+          if (same) {
+            simp = { str: s.konst || sStr(s.ast), tex: s.konst ? (s.konst === "∅" ? "\\varnothing" : "U") : sTex(s.ast) };
+            sol.steps.push({ title: "Soddalashtirish", concept: "venn", text: "Bo‘yaladigan sohalar birgalikda aynan " + (s.konst === "∅" ? "bo‘sh to‘plamni" : s.konst === "U" ? "universal to‘plam U ni" : simp.str + " to‘plamini") + " tashkil qiladi, shuning uchun berilgan ifoda shu qisqa ko‘rinishga teng.", tex: sTex(ast) + " = " + simp.tex });
+          }
+        }
+      } catch (_) { simp = null; }
       sol.verify = { ok: true, text: "Har bir " + (1 << k) + " ta elementar soha uchun a’zolik sharti alohida hisoblandi; diagramma shu natija asosida chizildi." };
     }
-    sol.answer = { text: sStr(ast) + " = {x | " + sCond(ast, false) + "}", tex: sTex(ast) + " = \\{\\, x \\mid " + sCond(ast, true) + " \\,\\}" };
+    if (simp) sol.answer = { text: sStr(ast) + " = " + simp.str, tex: sTex(ast) + " = " + simp.tex };
+    else sol.answer = { text: sStr(ast) + " = {x | " + sCond(ast, false) + "}", tex: sTex(ast) + " = \\{\\, x \\mid " + sCond(ast, true) + " \\,\\}" };
     return finish(sol);
   }
 
