@@ -2850,7 +2850,7 @@ async function serverAsk(kind, text, images, signal) {
     AI.ask = (kind, text, images, signal) => s.json(aiPrompt(kind, text), images ? { images, signal } : { signal });
     try { const lim = await s.limits(); AI.images = lim && lim.images ? lim.images : null; } catch (e) { AI.images = null; }
   } else {
-    try { const r = await fetch("api/health", { cache: "no-store" }); const j = await r.json(); if (!j || !j.recognize) return; AI.name = ({ gemini: "Gemini", anthropic: "Claude" })[j.provider] || "Sun’iy intellekt"; } catch (e) { return; }
+    try { const r = await fetch("api/health", { cache: "no-store" }); const j = await r.json(); if (!j || !j.recognize) return; AI.name = ({ gemini: "Gemini", anthropic: "Claude", groq: "Groq" })[j.provider] || "Sun’iy intellekt"; } catch (e) { return; }
     AI.sample = { server: true }; AI.ask = serverAsk;
     AI.images = { maxCount: 1, maxInputBytes: 25 * 1048576, mediaTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"] };
   }
